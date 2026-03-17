@@ -45,6 +45,10 @@ class HelloTriangleApplication
 	vk::raii::Instance instance = nullptr;
 	vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
 
+	vk::raii::PhysicalDevice physicalDevice = nullptr;
+	
+	std::vector<const char *> requiredDeviceExtension = {vk::KHRSwapchainExtensionName};
+
 	void initWindow()
 	{
 		glfwInit();
@@ -60,6 +64,7 @@ class HelloTriangleApplication
 	{
 		createInstance();
 		setupDebugMessenger();
+		pickPhysicalDevice();
 	}
 
 	void createInstance()
@@ -91,15 +96,15 @@ class HelloTriangleApplication
 			requiredLayers.assign(validationLayers.begin(), validationLayers.end());
 		}
 		
-		std::unordered_set<std::string> all_supported_layers;
+		std::unordered_set<std::string> allSupportedLayers;
 		auto layerProperties    = context.enumerateInstanceLayerProperties(); //expected in ~20 layer structs
 		for(auto const& layer: layerProperties){
-			all_supported_layers.insert(layer.layerName);
+			allSupportedLayers.insert(layer.layerName);
 		}
-		for(auto required_layer: requiredLayers){
-			std::string required_layer_str(required_layer);
-			if(!all_supported_layers.contains(required_layer)){
-				throw std::runtime_error(" A required layer is not supported:" + required_layer_str);
+		for(auto requiredLayer: requiredLayers){
+			std::string requiredLayerStr(requiredLayer);
+			if(!allSupportedLayers.contains(requiredLayer)){
+				throw std::runtime_error(" A required validation layer is not supported:" + requiredLayerStr);
 			}
 		}
 
@@ -122,8 +127,6 @@ class HelloTriangleApplication
 		                                  .enabledExtensionCount   = static_cast<uint32_t>(requiredExtensions.size()),
 		                                  .ppEnabledExtensionNames = requiredExtensions.data()};
 
-		// now defined everything we need to create a vulkan instace:
-		// custom allocator callbacks are ignored, use the standard one
 		instance = vk::raii::Instance(context, createInfo);
 	}
 
@@ -165,6 +168,63 @@ class HelloTriangleApplication
 
 		return vk::False;
 	}
+
+	bool isDeviceSuitable(vk::raii::PhysicalDevice const &physicalDevice)
+	{
+		// Check if the physicalDevice supports the Vulkan 1.3 API version
+		bool supportsVulkan1_3 = physicalDevice.getProperties().apiVersion >= vk::ApiVersion13;
+
+		// Check if any of the queue families support graphics operations
+		auto queueFamilies    = physicalDevice.getQueueFamilyProperties();
+		bool supportsGraphics = false;
+		for (auto const& qfp : queueFamilies) {
+    		if (qfp.queueFlags & vk::QueueFlagBits::eGraphics) {
+        		supportsGraphics = true;
+				break;
+    		}
+		}
+
+		// Check if all required physicalDevice extensions are available
+		std::vector<vk::ExtensionProperties> availableDeviceExtensions = physicalDevice.enumerateDeviceExtensionProperties();
+		
+		// can we find all requied in the available ones?
+		bool supportsAllRequiredExtensions = true;
+		std::unordered_set<std::string> availableExtensions;
+		for(auto const& extension: availableDeviceExtensions){
+			availableExtensions.insert(extension.extensionName);
+		}
+		for(std::string requiredExtension: requiredDeviceExtension){
+			if(!availableExtensions.contains(requiredExtension)){
+				supportsAllRequiredExtensions=false;
+				break;
+			}
+		}
+
+		// Check if the physicalDevice supports the required features
+		auto features =
+		    physicalDevice
+		        .template getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+		bool supportsRequiredFeatures = features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
+		                                features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
+
+		// Return true if the physicalDevice meets all the criteria
+		return supportsVulkan1_3 && supportsGraphics && supportsAllRequiredExtensions && supportsRequiredFeatures;
+	}
+
+	void pickPhysicalDevice()
+	{
+		std::vector<vk::raii::PhysicalDevice> physicalDevices = instance.enumeratePhysicalDevices();
+
+		for(auto const& candidate: physicalDevices){
+			//we just pick the first suitable, but could also score devices, then pick the highest score
+			if(isDeviceSuitable(candidate)){
+				physicalDevice = candidate;
+				break;
+			}
+		}
+		
+		if (physicalDevice==nullptr){throw std::runtime_error("failed to find a suitable GPU!");}
+	}	
 
 	void mainLoop()
 	{
