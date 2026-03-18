@@ -46,6 +46,9 @@ class HelloTriangleApplication
 	vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
 
 	vk::raii::PhysicalDevice physicalDevice = nullptr;
+	vk::raii::Device         device         = nullptr;
+
+	vk::raii::Queue graphicsQueue = nullptr;
 	
 	std::vector<const char *> requiredDeviceExtension = {vk::KHRSwapchainExtensionName};
 
@@ -65,6 +68,7 @@ class HelloTriangleApplication
 		createInstance();
 		setupDebugMessenger();
 		pickPhysicalDevice();
+		createLogicalDevice();
 	}
 
 	void createInstance()
@@ -224,7 +228,51 @@ class HelloTriangleApplication
 		}
 		
 		if (physicalDevice==nullptr){throw std::runtime_error("failed to find a suitable GPU!");}
-	}	
+	}
+	
+	void createLogicalDevice()
+	{
+		// find the index of the first queue family that supports graphics
+		std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
+
+		// get the first index into queueFamilyProperties which supports graphics
+		uint32_t graphicsQueueFamilyIndex = 0;
+		bool found = false;
+		for (uint32_t i = 0; i < queueFamilyProperties.size(); ++i){
+    		if (queueFamilyProperties[i].queueFlags & vk::QueueFlagBits::eGraphics) {
+        		graphicsQueueFamilyIndex = i;
+        		found = true;
+        		break;
+    		}
+		}
+		assert(found && "No graphics queue family found!");
+
+		// Vulkan introduces chained structs (like a linked list) in order to extend with new info on existing api struct
+		// Struct Chain is just chaining together the structs inside the template
+		vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain = {
+		    {},                                   // vk::PhysicalDeviceFeatures2
+		    {.dynamicRendering = true},           // vk::PhysicalDeviceVulkan13Features
+		    {.extendedDynamicState = true}        // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
+		};
+
+		// create a Device
+		float queuePriority = 0.5f;  //float 32 bit
+		vk::DeviceQueueCreateInfo deviceQueueCreateInfo{
+														.queueFamilyIndex = graphicsQueueFamilyIndex, 
+														.queueCount = 1, 
+														.pQueuePriorities = &queuePriority
+													};
+
+		vk::DeviceCreateInfo deviceCreateInfo{	.pNext  				 = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
+		                                        .queueCreateInfoCount    = 1,
+		                                        .pQueueCreateInfos       = &deviceQueueCreateInfo,
+		                                        .enabledExtensionCount   = static_cast<uint32_t>(requiredDeviceExtension.size()),
+		                                        .ppEnabledExtensionNames = requiredDeviceExtension.data()
+											};
+
+		device        = vk::raii::Device(physicalDevice, deviceCreateInfo);
+		graphicsQueue = vk::raii::Queue(device, graphicsQueueFamilyIndex, 0);
+	}
 
 	void mainLoop()
 	{
