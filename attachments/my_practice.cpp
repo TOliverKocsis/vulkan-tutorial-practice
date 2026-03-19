@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <vector>
 #include <unordered_set>
+#include <limits>
 
 #if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
 #	include <vulkan/vulkan_raii.hpp>
@@ -49,6 +50,8 @@ class HelloTriangleApplication
 	vk::raii::Device         device         = nullptr;
 
 	vk::raii::Queue graphicsQueue = nullptr;
+
+	vk::raii::SurfaceKHR surface = nullptr;
 	
 	std::vector<const char *> requiredDeviceExtension = {vk::KHRSwapchainExtensionName};
 
@@ -67,6 +70,7 @@ class HelloTriangleApplication
 	{
 		createInstance();
 		setupDebugMessenger();
+		createSurface();
 		pickPhysicalDevice();
 		createLogicalDevice();
 	}
@@ -215,6 +219,15 @@ class HelloTriangleApplication
 		return supportsVulkan1_3 && supportsGraphics && supportsAllRequiredExtensions && supportsRequiredFeatures;
 	}
 
+	void createSurface(){
+		VkSurfaceKHR _surface;
+		if (glfwCreateWindowSurface(*instance, window, nullptr, &_surface) != 0)
+		{
+			throw std::runtime_error("failed to create window surface!");
+		}
+		surface = vk::raii::SurfaceKHR(instance, _surface);
+	}
+
 	void pickPhysicalDevice()
 	{
 		std::vector<vk::raii::PhysicalDevice> physicalDevices = instance.enumeratePhysicalDevices();
@@ -236,16 +249,19 @@ class HelloTriangleApplication
 		std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
 
 		// get the first index into queueFamilyProperties which supports graphics
-		uint32_t graphicsQueueFamilyIndex = 0;
-		bool found = false;
+		uint32_t queueIndex = std::numeric_limits<uint32_t>::max();
 		for (uint32_t i = 0; i < queueFamilyProperties.size(); ++i){
-    		if (queueFamilyProperties[i].queueFlags & vk::QueueFlagBits::eGraphics) {
-        		graphicsQueueFamilyIndex = i;
-        		found = true;
+    		if (
+				(queueFamilyProperties[i].queueFlags & vk::QueueFlagBits::eGraphics) and  //check graphics computation
+				(physicalDevice.getSurfaceSupportKHR(i, *surface))  //check if we can rpesent result to a surface
+				){
+        		queueIndex = i;
         		break;
     		}
 		}
-		assert(found && "No graphics queue family found!");
+		if (queueIndex == std::numeric_limits<uint32_t>::max()){
+			throw std::runtime_error("Could not find a queue for graphics and present -> terminating");
+		}
 
 		// Vulkan introduces chained structs (like a linked list) in order to extend with new info on existing api struct
 		// Struct Chain is just chaining together the structs inside the template
@@ -258,7 +274,7 @@ class HelloTriangleApplication
 		// create a Device
 		float queuePriority = 0.5f;  //float 32 bit
 		vk::DeviceQueueCreateInfo deviceQueueCreateInfo{
-														.queueFamilyIndex = graphicsQueueFamilyIndex, 
+														.queueFamilyIndex = queueIndex, 
 														.queueCount = 1, 
 														.pQueuePriorities = &queuePriority
 													};
@@ -271,7 +287,7 @@ class HelloTriangleApplication
 											};
 
 		device        = vk::raii::Device(physicalDevice, deviceCreateInfo);
-		graphicsQueue = vk::raii::Queue(device, graphicsQueueFamilyIndex, 0);
+		graphicsQueue = vk::raii::Queue(device, queueIndex, 0);
 	}
 
 	void mainLoop()
