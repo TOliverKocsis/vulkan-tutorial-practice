@@ -45,14 +45,17 @@ class HelloTriangleApplication
 	vk::raii::Context context;
 	vk::raii::Instance instance = nullptr;
 	vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
-
 	vk::raii::PhysicalDevice physicalDevice = nullptr;
 	vk::raii::Device         device         = nullptr;
-
-	vk::raii::Queue graphicsQueue = nullptr;
-
+	vk::raii::Queue queue = nullptr;
 	vk::raii::SurfaceKHR surface = nullptr;
-	
+	vk::raii::SwapchainKHR swapChain = nullptr;
+	std::vector<vk::Image> swapChainImages;
+	vk::SurfaceFormatKHR swapChainSurfaceFormat;
+	vk::Extent2D swapChainExtent;
+	std::vector<vk::raii::ImageView> swapChainImageViews;
+
+
 	std::vector<const char *> requiredDeviceExtension = {vk::KHRSwapchainExtensionName};
 
 	void initWindow()
@@ -73,6 +76,8 @@ class HelloTriangleApplication
 		createSurface();
 		pickPhysicalDevice();
 		createLogicalDevice();
+		createSwapChain();
+		createImageViews();
 	}
 
 	void createInstance()
@@ -282,12 +287,118 @@ class HelloTriangleApplication
 		vk::DeviceCreateInfo deviceCreateInfo{	.pNext  				 = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
 		                                        .queueCreateInfoCount    = 1,
 		                                        .pQueueCreateInfos       = &deviceQueueCreateInfo,
-		                                        .enabledExtensionCount   = static_cast<uint32_t>(requiredDeviceExtension.size()),
-		                                        .ppEnabledExtensionNames = requiredDeviceExtension.data()
+		                                        .enabledExtensionCount   = static_cast<uint32_t>(requiredDeviceExtension.size()), 
+		                                        .ppEnabledExtensionNames = requiredDeviceExtension.data() //swapchain enable
 											};
 
 		device        = vk::raii::Device(physicalDevice, deviceCreateInfo);
-		graphicsQueue = vk::raii::Queue(device, queueIndex, 0);
+		queue = vk::raii::Queue(device, queueIndex, 0);
+	}
+
+	/*
+		Return the resolution of swap chain images 
+	*/
+	vk::Extent2D chooseSwapExtent(vk::SurfaceCapabilitiesKHR const &capabilities)
+	{
+		//in case the width+height is a sentiunel value, it signals that out gpu kbnows from the os,
+		//that we have a high dpi display, where logical screen cordinates is != framebuffer
+		//in this case screen coordinates !=  to pixels
+		//this is bascially because OS is abstracting away actual screen size, so that ui elements have consistent size,
+		//regardless of high vs low dpi
+		if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
+		{
+			return capabilities.currentExtent;
+		}
+		int width, height;
+		glfwGetFramebufferSize(window, &width, &height);
+
+		return {
+			//clamp: reduce/increase width/height to be fitting between capabilities
+		    std::clamp<uint32_t>(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
+		    std::clamp<uint32_t>(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)};
+	}
+
+	static uint32_t chooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const &surfaceCapabilities)
+	{
+		auto minImageCount = std::max(3u, surfaceCapabilities.minImageCount);
+		if ((0 < surfaceCapabilities.maxImageCount) and (surfaceCapabilities.maxImageCount < minImageCount))
+		{
+			minImageCount = surfaceCapabilities.maxImageCount;
+		}
+		return minImageCount;
+	}
+
+	static vk::SurfaceFormatKHR chooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const &availableFormats)
+	{
+		assert(!availableFormats.empty());
+
+		for (auto const &format : availableFormats) {
+			//try to find prefered pixel format and color space (sRGB)
+			//(B8G8R8A8 = blue, green, red, alpha, 8 bits each)
+        	if (format.format == vk::Format::eB8G8R8A8Srgb and format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear) {
+            	return format;
+        	}
+    	}
+    	return availableFormats[0];  // fallback: first available
+	}
+
+	static vk::PresentModeKHR chooseSwapPresentMode(std::vector<vk::PresentModeKHR> const &availablePresentModes)
+	{
+		assert(std::ranges::any_of(availablePresentModes, [](auto presentMode) { return presentMode == vk::PresentModeKHR::eFifo; }));
+		return std::ranges::any_of(availablePresentModes,
+		                           [](const vk::PresentModeKHR value) { return vk::PresentModeKHR::eMailbox == value; }) ?
+		           vk::PresentModeKHR::eMailbox :
+		           vk::PresentModeKHR::eFifo;
+	}
+
+	void createSwapChain(){
+		//we query the gpu(physical dev) for info that it holds (some indirect from os)
+		//and call for a function to select prefered 
+		vk::SurfaceCapabilitiesKHR surfaceCapabilities = physicalDevice.getSurfaceCapabilitiesKHR(*surface);
+		swapChainExtent = chooseSwapExtent(surfaceCapabilities); //(width * height)
+		uint32_t minImageCount  = chooseSwapMinImageCount(surfaceCapabilities);
+
+		std::vector<vk::SurfaceFormatKHR> availableFormats = physicalDevice.getSurfaceFormatsKHR(*surface);
+		swapChainSurfaceFormat = chooseSwapSurfaceFormat(availableFormats);
+
+		std::vector<vk::PresentModeKHR> availablePresentModes = physicalDevice.getSurfacePresentModesKHR(*surface);
+		vk::PresentModeKHR              presentMode           = chooseSwapPresentMode(availablePresentModes);
+		//everything collected, can fill out struct and call raii creation
+		vk::SwapchainCreateInfoKHR swapChainCreateInfo{.surface          = *surface,
+		                                               .minImageCount    = minImageCount,
+		                                               .imageFormat      = swapChainSurfaceFormat.format,
+		                                               .imageColorSpace  = swapChainSurfaceFormat.colorSpace,
+		                                               .imageExtent      = swapChainExtent,
+		                                               .imageArrayLayers = 1,
+		                                               .imageUsage       = vk::ImageUsageFlagBits::eColorAttachment,
+		                                               .imageSharingMode = vk::SharingMode::eExclusive,
+		                                               .preTransform     = surfaceCapabilities.currentTransform,
+		                                               .compositeAlpha   = vk::CompositeAlphaFlagBitsKHR::eOpaque,
+		                                               .presentMode      = presentMode,
+		                                               .clipped          = true};
+
+		swapChain       = vk::raii::SwapchainKHR(device, swapChainCreateInfo);
+		swapChainImages = swapChain.getImages();		
+	}
+	
+	/*
+	Populate the swap chain images views vector.
+	Images are raw gpu memory, imageviews wrap it with additional info so that we can use it as render targets
+	layer (/VR?) , mip level, color aspect, size
+	*/
+	void createImageViews()
+	{
+		assert(swapChainImageViews.empty());
+
+		//make info struct once, and reuse it for every image
+		vk::ImageViewCreateInfo imageViewCreateInfo{.viewType         = vk::ImageViewType::e2D,
+		                                            .format           = swapChainSurfaceFormat.format,
+		                                            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+		for (auto &image : swapChainImages)
+		{
+			imageViewCreateInfo.image = image;
+			swapChainImageViews.emplace_back(device, imageViewCreateInfo);
+		}
 	}
 
 	void mainLoop()
