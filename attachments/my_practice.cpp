@@ -56,6 +56,7 @@ class HelloTriangleApplication
 	vk::Extent2D swapChainExtent;
 	std::vector<vk::raii::ImageView> swapChainImageViews;
 
+	vk::raii::PipelineLayout pipelineLayout = nullptr;
 
 	std::vector<const char *> requiredDeviceExtension = {vk::KHRSwapchainExtensionName};
 
@@ -218,8 +219,9 @@ class HelloTriangleApplication
 		// Check if the physicalDevice supports the required features
 		auto features =
 		    physicalDevice
-		        .template getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
-		bool supportsRequiredFeatures = features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
+		        .template getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+		bool supportsRequiredFeatures = features.template get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters &&
+		                                features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
 		                                features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
 
 		// Return true if the physicalDevice meets all the criteria
@@ -272,8 +274,12 @@ class HelloTriangleApplication
 
 		// Vulkan introduces chained structs (like a linked list) in order to extend with new info on existing api struct
 		// Struct Chain is just chaining together the structs inside the template
-		vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain = {
+		vk::StructureChain<vk::PhysicalDeviceFeatures2, 
+							vk::PhysicalDeviceVulkan11Features,
+							vk::PhysicalDeviceVulkan13Features,
+							vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain = {
 		    {},                                   // vk::PhysicalDeviceFeatures2
+		    {.shaderDrawParameters = true},       // vk::PhysicalDeviceVulkan11Features
 		    {.dynamicRendering = true},           // vk::PhysicalDeviceVulkan13Features
 		    {.extendedDynamicState = true}        // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
 		};
@@ -431,11 +437,51 @@ class HelloTriangleApplication
 		//probably later we can see how the vertex buffer is used, thats should be in the gpu memory
 		//in reality an artist would draw stuff in a 3d modeling software(blender) and that software would make files that could be 
 		// loaded at runtime as vertex buffers
+
+		//1. Vertex buffer (with handwritten values)
     	vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
 
     	vk::PipelineShaderStageCreateInfo vertShaderStageInfo{.stage = vk::ShaderStageFlagBits::eVertex, .module = shaderModule, .pName = "vertMain"};
     	vk::PipelineShaderStageCreateInfo fragShaderStageInfo{.stage = vk::ShaderStageFlagBits::eFragment, .module = shaderModule, .pName = "fragMain"};
     	vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
+
+		//2. Input Assembler
+		vk::PipelineVertexInputStateCreateInfo   vertexInputInfo;
+		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{.topology = vk::PrimitiveTopology::eTriangleList};
+
+		//not mapped to a stage:
+		//cordinate transform between rasterization and framebuffer
+		vk::PipelineViewportStateCreateInfo      viewportState{.viewportCount = 1, .scissorCount = 1};
+		
+		//3. Rasterizer
+		vk::PipelineRasterizationStateCreateInfo rasterizer{.depthClampEnable = vk::False,
+															.rasterizerDiscardEnable = vk::False,
+															.polygonMode = vk::PolygonMode::eFill,	//solid triangles
+															.cullMode = vk::CullModeFlagBits::eBack,
+															.frontFace = vk::FrontFace::eClockwise,
+															.depthBiasEnable = vk::False,
+															.depthBiasSlopeFactor = 1.0f,
+															.lineWidth = 1.0f};
+		
+		//4. Fragment shader
+		vk::PipelineMultisampleStateCreateInfo multisampling{.rasterizationSamples = vk::SampleCountFlagBits::e1, .sampleShadingEnable = vk::False};
+		
+		//5. Color Blending
+		vk::PipelineColorBlendAttachmentState colorBlendAttachment{.blendEnable    = vk::False,
+		                                                           .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA};
+		vk::PipelineColorBlendStateCreateInfo colorBlending{.logicOpEnable = vk::False,
+															.logicOp = vk::LogicOp::eCopy,
+															.attachmentCount = 1,
+															.pAttachments = &colorBlendAttachment};
+		
+		//dynamic sizing of swapchain: the viewport and sciccor rectangle (discard everything outside of it) will be decided at drawing time
+		std::vector dynamicStates = { 	vk::DynamicState::eViewport,
+										vk::DynamicState::eScissor}; 
+		vk::PipelineDynamicStateCreateInfo dynamicState{.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()), .pDynamicStates = dynamicStates.data()};
+		
+		//not yet filled out!
+		vk::PipelineLayoutCreateInfo pipelineLayoutInfo; 
+		pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 	}
 
 	void mainLoop()
