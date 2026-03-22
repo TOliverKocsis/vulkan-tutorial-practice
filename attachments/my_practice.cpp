@@ -7,6 +7,7 @@
 #include <vector>
 #include <unordered_set>
 #include <limits>
+#include <fstream>
 
 #if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
 #	include <vulkan/vulkan_raii.hpp>
@@ -78,6 +79,7 @@ class HelloTriangleApplication
 		createLogicalDevice();
 		createSwapChain();
 		createImageViews();
+		createGraphicsPipeline();
 	}
 
 	void createInstance()
@@ -399,6 +401,41 @@ class HelloTriangleApplication
 			imageViewCreateInfo.image = image;
 			swapChainImageViews.emplace_back(device, imageViewCreateInfo);
 		}
+	}
+
+	[[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char> &code) const
+	{
+    	vk::ShaderModuleCreateInfo createInfo{.codeSize = code.size() * sizeof(char), .pCode = reinterpret_cast<const uint32_t *>(code.data())};
+    	vk::raii::ShaderModule     shaderModule{device, createInfo};
+    	return shaderModule;
+	}
+
+	static std::vector<char> readFile(const std::string &filename)
+	{	
+		//open at end of to get size
+    	std::ifstream file(filename, std::ios::ate | std::ios::binary);
+    	if (!file.is_open())
+    	{
+        	throw std::runtime_error("failed to open file!");
+    	}
+    	std::vector<char> buffer(file.tellg()); //use cursor end size to make correct size
+    	file.seekg(0, std::ios::beg);
+    	file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    	file.close();
+    	return buffer;
+	}
+
+	void createGraphicsPipeline()
+	{
+		//the tutorial here, inbstead of using actual vertex buffers, uses some hand written .slang file that hold the vertex points in model space
+		//probably later we can see how the vertex buffer is used, thats should be in the gpu memory
+		//in reality an artist would draw stuff in a 3d modeling software(blender) and that software would make files that could be 
+		// loaded at runtime as vertex buffers
+    	vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
+
+    	vk::PipelineShaderStageCreateInfo vertShaderStageInfo{.stage = vk::ShaderStageFlagBits::eVertex, .module = shaderModule, .pName = "vertMain"};
+    	vk::PipelineShaderStageCreateInfo fragShaderStageInfo{.stage = vk::ShaderStageFlagBits::eFragment, .module = shaderModule, .pName = "fragMain"};
+    	vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
 	}
 
 	void mainLoop()
