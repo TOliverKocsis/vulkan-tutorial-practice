@@ -48,6 +48,7 @@ class HelloTriangleApplication
 	vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
 	vk::raii::PhysicalDevice physicalDevice = nullptr;
 	vk::raii::Device         device         = nullptr;
+	uint32_t queueIndex = std::numeric_limits<uint32_t>::max();
 	vk::raii::Queue queue = nullptr;
 	vk::raii::SurfaceKHR surface = nullptr;
 	vk::raii::SwapchainKHR swapChain = nullptr;
@@ -58,6 +59,8 @@ class HelloTriangleApplication
 
 	vk::raii::PipelineLayout pipelineLayout = nullptr;
 	vk::raii::Pipeline       graphicsPipeline = nullptr;
+	vk::raii::CommandPool    commandPool      = nullptr;
+	vk::raii::CommandBuffer  commandBuffer    = nullptr;
 
 	std::vector<const char *> requiredDeviceExtension = {vk::KHRSwapchainExtensionName};
 
@@ -82,6 +85,8 @@ class HelloTriangleApplication
 		createSwapChain();
 		createImageViews();
 		createGraphicsPipeline();
+		createCommandPool();
+		createCommandBuffer();
 	}
 
 	void createInstance()
@@ -259,7 +264,6 @@ class HelloTriangleApplication
 		std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
 
 		// get the first index into queueFamilyProperties which supports graphics
-		uint32_t queueIndex = std::numeric_limits<uint32_t>::max();
 		for (uint32_t i = 0; i < queueFamilyProperties.size(); ++i){
     		if (
 				(queueFamilyProperties[i].queueFlags & vk::QueueFlagBits::eGraphics) and  //check graphics computation
@@ -434,7 +438,7 @@ class HelloTriangleApplication
 
 	void createGraphicsPipeline()
 	{
-		//the tutorial here, inbstead of using actual vertex buffers, uses some hand written .slang file that hold the vertex points in model space
+		//the tutorial here, instead of using actual vertex buffers, uses some hand written .slang file that hold the vertex points in model space
 		//probably later we can see how the vertex buffer is used, thats should be in the gpu memory
 		//in reality an artist would draw stuff in a 3d modeling software(blender) and that software would make files that could be 
 		// loaded at runtime as vertex buffers
@@ -499,6 +503,21 @@ class HelloTriangleApplication
 		    {.colorAttachmentCount = 1, .pColorAttachmentFormats = &swapChainSurfaceFormat.format}};
 
 		graphicsPipeline = vk::raii::Pipeline(device, nullptr, pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
+	}
+
+	void createCommandPool()
+	{
+		vk::CommandPoolCreateInfo poolInfo{.flags= vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+		                                   .queueFamilyIndex = queueIndex};
+		commandPool = vk::raii::CommandPool(device, poolInfo);
+	}
+
+	void createCommandBuffer()
+	{
+		vk::CommandBufferAllocateInfo allocInfo{.commandPool = commandPool,
+												.level = vk::CommandBufferLevel::ePrimary,
+												.commandBufferCount = 1};
+		commandBuffer = std::move(vk::raii::CommandBuffers(device, allocInfo).front());
 	}
 
 	void mainLoop()
