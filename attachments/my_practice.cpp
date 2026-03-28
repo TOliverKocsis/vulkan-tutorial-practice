@@ -8,6 +8,8 @@
 #include <unordered_set>
 #include <limits>
 #include <fstream>
+#include <array>
+#include <assert.h>
 
 #if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
 #	include <vulkan/vulkan_raii.hpp>
@@ -17,6 +19,7 @@ import vulkan_hpp;
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
 
 constexpr uint32_t WIDTH  = 800;
 constexpr uint32_t HEIGHT = 600;
@@ -31,6 +34,29 @@ constexpr bool enableValidationLayers = false;
 constexpr bool enableValidationLayers = true;
 #endif
 
+struct Vertex
+{
+	glm::vec2 pos;
+	glm::vec3 color;
+
+	static vk::VertexInputBindingDescription getBindingDescription()
+	{
+		return {0, sizeof(Vertex), vk::VertexInputRate::eVertex};
+	}
+
+	static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescriptions()
+	{
+		return {
+		    vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, pos)),
+		    vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color))};
+	}
+};
+
+const std::vector<Vertex> vertices = {
+    {{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
+    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+};
 class HelloTriangleApplication
 {
   public:
@@ -68,6 +94,11 @@ class HelloTriangleApplication
 	std::vector<vk::raii::Fence>     inFlightFences;
 	uint32_t                         frameIndex = 0;
 
+	vk::raii::Buffer       vertexBuffer       = nullptr;
+	vk::raii::DeviceMemory vertexBufferMemory = nullptr;
+
+	bool framebufferResized = false; //warn us when pixel extent change (usually window resize)
+
 	std::vector<const char *> requiredDeviceExtension = {vk::KHRSwapchainExtensionName};
 
 	void initWindow()
@@ -75,10 +106,21 @@ class HelloTriangleApplication
 		glfwInit();
 
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-		// resize takes special care, disable for now
-		glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
 		window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+		glfwSetWindowUserPointer(window, this);
+		glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
+	}
+
+	/*
+	* Register this callback so that when OS will tell GLFW if window has been resized, this callback allows us
+	* to set a variable true, so we can handle swapchain re-create
+	*/
+	static void framebufferResizeCallback(GLFWwindow *window, int width, int height)
+	{
+		auto app = reinterpret_cast<HelloTriangleApplication *>(glfwGetWindowUserPointer(window));
+		app->framebufferResized = true;
 	}
 
 	void initVulkan()
@@ -92,6 +134,7 @@ class HelloTriangleApplication
 		createImageViews();
 		createGraphicsPipeline();
 		createCommandPool();
+		createVertexBuffer();
 		createCommandBuffers();
 		createSyncObjects();
 	}
@@ -235,7 +278,6 @@ class HelloTriangleApplication
 		        .template getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
 		bool supportsRequiredFeatures = features.template get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters &&
 		                                features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
-										features.template get<vk::PhysicalDeviceVulkan13Features>().synchronization2 &&
 		                                features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
 
 		// Return true if the physicalDevice meets all the criteria
@@ -287,14 +329,15 @@ class HelloTriangleApplication
 
 		// Vulkan introduces chained structs (like a linked list) in order to extend with new info on existing api struct
 		// Struct Chain is just chaining together the structs inside the template
-		vk::StructureChain<vk::PhysicalDeviceFeatures2, 
-							vk::PhysicalDeviceVulkan11Features,
-							vk::PhysicalDeviceVulkan13Features,
+		// query for required features (Vulkan 1.1 and 1.3)
+		vk::StructureChain<	vk::PhysicalDeviceFeatures2, 
+							vk::PhysicalDeviceVulkan11Features, 
+							vk::PhysicalDeviceVulkan13Features, 
 							vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain = {
-		    {},                                   					// vk::PhysicalDeviceFeatures2
-		    {.shaderDrawParameters = true},       					// vk::PhysicalDeviceVulkan11Features
-		    {.synchronization2 = true, .dynamicRendering = true},  	// vk::PhysicalDeviceVulkan13Features
-		    {.extendedDynamicState = true}        					// vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
+		    {},                                                          // vk::PhysicalDeviceFeatures2
+		    {.shaderDrawParameters = true},                              // vk::PhysicalDeviceVulkan11Features
+		    {.synchronization2 = true, .dynamicRendering = true},        // vk::PhysicalDeviceVulkan13Features
+		    {.extendedDynamicState = true}                               // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
 		};
 
 		// create a Device
@@ -446,10 +489,6 @@ class HelloTriangleApplication
 
 	void createGraphicsPipeline()
 	{
-		//the tutorial here, instead of using actual vertex buffers, uses some hand written .slang file that hold the vertex points in model space
-		//probably later we can see how the vertex buffer is used, thats should be in the gpu memory
-		//in reality an artist would draw stuff in a 3d modeling software(blender) and that software would make files that could be 
-		// loaded at runtime as vertex buffers
 
 		//1. Vertex buffer (with handwritten values)
     	vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
@@ -459,7 +498,14 @@ class HelloTriangleApplication
     	vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
 
 		//2. Input Assembler
-		vk::PipelineVertexInputStateCreateInfo   vertexInputInfo;
+
+		auto bindingDescription    = Vertex::getBindingDescription();
+		auto attributeDescriptions = Vertex::getAttributeDescriptions();
+		vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
+												.vertexBindingDescriptionCount = 1, 
+												.pVertexBindingDescriptions = &bindingDescription, 
+												.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size()),
+												.pVertexAttributeDescriptions = attributeDescriptions.data()};
 		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{.topology = vk::PrimitiveTopology::eTriangleList};
 
 		//not mapped to a stage:
@@ -520,8 +566,45 @@ class HelloTriangleApplication
 		commandPool = vk::raii::CommandPool(device, poolInfo);
 	}
 
+
+	void createVertexBuffer()
+	{
+		vk::BufferCreateInfo bufferInfo{.size = sizeof(vertices[0]) * vertices.size(),
+										.usage = vk::BufferUsageFlagBits::eVertexBuffer,
+										.sharingMode = vk::SharingMode::eExclusive};
+		vertexBuffer = vk::raii::Buffer(device, bufferInfo);
+
+		vk::MemoryRequirements memRequirements = vertexBuffer.getMemoryRequirements();
+		vk::MemoryAllocateInfo memoryAllocateInfo{	.allocationSize = memRequirements.size,
+													.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
+													vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)};
+		vertexBufferMemory = vk::raii::DeviceMemory(device, memoryAllocateInfo);
+
+		vertexBuffer.bindMemory(*vertexBufferMemory, 0);
+
+		void *data = vertexBufferMemory.mapMemory(0, bufferInfo.size);
+		memcpy(data, vertices.data(), bufferInfo.size);
+		vertexBufferMemory.unmapMemory();
+	}
+
+	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)
+	{
+		//find the exact type of GPU memory we want
+		vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
+		for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)
+		{
+			if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties)
+			{
+				return i;
+			}
+		}
+		throw std::runtime_error("failed to find suitable memory type!");
+	}
+
+
 	void createCommandBuffers()
 	{
+		commandBuffers.clear();
 		vk::CommandBufferAllocateInfo allocInfo{.commandPool = commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = MAX_FRAMES_IN_FLIGHT};
 		commandBuffers = vk::raii::CommandBuffers(device, allocInfo);
 	}
@@ -599,6 +682,7 @@ class HelloTriangleApplication
 		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);
 		commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent.width), static_cast<float>(swapChainExtent.height), 0.0f, 1.0f));
 		commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
+		commandBuffer.bindVertexBuffers(0, *vertexBuffer, {0});
 		commandBuffer.draw(3, 1, 0, 0);
 		commandBuffer.endRendering();
 		// After rendering, transition the swapchain image to PRESENT_SRC - to fast to read memory for screen presentation
@@ -627,9 +711,26 @@ class HelloTriangleApplication
 		{
 			throw std::runtime_error("failed to wait for fence!");
 		}
-		device.resetFences(*inFlightFences[frameIndex]);
 
 		auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores[frameIndex], nullptr);
+
+		// Due to VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS being defined, eErrorOutOfDateKHR can be checked as a result
+		// here and does not need to be caught by an exception.
+		if (result == vk::Result::eErrorOutOfDateKHR)
+		{
+			recreateSwapChain();
+			return;
+		}
+		// On other success codes than eSuccess and eSuboptimalKHR we just throw an exception.
+		// On any error code, aquireNextImage already threw an exception.
+		if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
+		{
+			assert(result == vk::Result::eTimeout || result == vk::Result::eNotReady);
+			throw std::runtime_error("failed to acquire swap chain image!");
+		}
+
+		// Only reset the fence if we are submitting work
+		device.resetFences(*inFlightFences[frameIndex]);
 
 		commandBuffers[frameIndex].reset();
 		recordCommandBuffer(imageIndex);
@@ -650,15 +751,17 @@ class HelloTriangleApplication
 		                                        .pSwapchains        = &*swapChain,
 		                                        .pImageIndices      = &imageIndex};
 		result = queue.presentKHR(presentInfoKHR);
-		switch (result)
+		// Due to VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS being defined, eErrorOutOfDateKHR can be checked as a result
+		// here and does not need to be caught by an exception.
+		if ((result == vk::Result::eSuboptimalKHR) or (result == vk::Result::eErrorOutOfDateKHR) or framebufferResized)
 		{
-			case vk::Result::eSuccess:
-				break;
-			case vk::Result::eSuboptimalKHR:
-				std::cout << "vk::Queue::presentKHR returned vk::Result::eSuboptimalKHR !\n";
-				break;
-			default:
-				break;        // an unexpected result is returned!
+			framebufferResized = false; // value set by GLFW window callback
+			recreateSwapChain();
+		}
+		else
+		{
+			// There are no other success codes than eSuccess; on any error code, presentKHR already threw an exception.
+			assert(result == vk::Result::eSuccess);
 		}
 		frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
 		//cpu is going in round on fences, as soon as the previous is done, we can go to next one
@@ -681,6 +784,29 @@ class HelloTriangleApplication
 			presentCompleteSemaphores.emplace_back(device, vk::SemaphoreCreateInfo());
 			inFlightFences.emplace_back(device, vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});
 		}
+	}
+
+	void cleanupSwapChain()
+	{
+		swapChainImageViews.clear();
+		swapChain = nullptr;
+	}
+
+	void recreateSwapChain()
+	{
+		int width = 0, height = 0;
+		glfwGetFramebufferSize(window, &width, &height);
+		while (width == 0 || height == 0)
+		{
+			glfwGetFramebufferSize(window, &width, &height);
+			glfwWaitEvents();
+		}
+
+		device.waitIdle(); // finish current rendering jobs already issues
+
+		cleanupSwapChain();
+		createSwapChain();
+		createImageViews();
 	}
 
 
