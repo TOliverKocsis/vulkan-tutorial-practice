@@ -119,7 +119,7 @@ class HelloTriangleApplication
 	*/
 	static void framebufferResizeCallback(GLFWwindow *window, int width, int height)
 	{
-		auto app = reinterpret_cast<HelloTriangleApplication *>(glfwGetWindowUserPointer(window));
+		auto app = static_cast<HelloTriangleApplication *>(glfwGetWindowUserPointer(window));
 		app->framebufferResized = true;
 	}
 
@@ -569,23 +569,63 @@ class HelloTriangleApplication
 
 	void createVertexBuffer()
 	{
-		vk::BufferCreateInfo bufferInfo{.size = sizeof(vertices[0]) * vertices.size(),
-										.usage = vk::BufferUsageFlagBits::eVertexBuffer,
+		//1. Create a buffer (memory handler) thats is CPU visible
+		vk::BufferCreateInfo   stagingInfo{
+											.size = sizeof(vertices[0]) * vertices.size(), 
+											.usage = vk::BufferUsageFlagBits::eTransferSrc, //will be used as source of transfer
+											.sharingMode = vk::SharingMode::eExclusive};
+		vk::raii::Buffer       stagingBuffer(device, stagingInfo);
+		//1.2 Allocate memory for buffer on the device
+		vk::MemoryRequirements memRequirementsStaging = stagingBuffer.getMemoryRequirements();
+		vk::MemoryAllocateInfo memoryAllocateInfoStaging{
+														.allocationSize = memRequirementsStaging.size, 
+														.memoryTypeIndex = findMemoryType(
+																			memRequirementsStaging.memoryTypeBits,
+																			vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)};
+		vk::raii::DeviceMemory stagingBufferMemory(device, memoryAllocateInfoStaging);
+		//1.3 bind buffer and memory
+		stagingBuffer.bindMemory(stagingBufferMemory, 0);
+
+		//2. copy our hardcoded vertex data to the staging memory on the gpu
+		// map:Memory: mount the specific gpu mem to a cpu address space so that cpuc an execute the copy
+		void *dataStaging = stagingBufferMemory.mapMemory(0, stagingInfo.size);
+		memcpy(dataStaging, vertices.data(), stagingInfo.size);
+		// good practice to unmap as soon as possible, as some devices might have limited mappings avilable
+		stagingBufferMemory.unmapMemory();
+
+		//3. Create a buffer that is only gpu accessible to copy the staged memory into this
+		// reason is that this type of memory is faster to use
+		vk::BufferCreateInfo bufferInfo{
+										.size = sizeof(vertices[0]) * vertices.size(),
+										.usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
 										.sharingMode = vk::SharingMode::eExclusive};
 		vertexBuffer = vk::raii::Buffer(device, bufferInfo);
 
 		vk::MemoryRequirements memRequirements = vertexBuffer.getMemoryRequirements();
-		vk::MemoryAllocateInfo memoryAllocateInfo{	.allocationSize = memRequirements.size,
+		vk::MemoryAllocateInfo memoryAllocateInfo{
+													.allocationSize = memRequirements.size,
 													.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
-													vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)};
+													vk::MemoryPropertyFlagBits::eDeviceLocal)};
 		vertexBufferMemory = vk::raii::DeviceMemory(device, memoryAllocateInfo);
 
 		vertexBuffer.bindMemory(*vertexBufferMemory, 0);
-
-		void *data = vertexBufferMemory.mapMemory(0, bufferInfo.size);
-		memcpy(data, vertices.data(), bufferInfo.size);
-		vertexBufferMemory.unmapMemory();
+		
+		//4. execute the copy from the staged cpu visible gpu memory, to the faster gpu memory
+		copyBuffer(stagingBuffer, vertexBuffer, stagingInfo.size);
+		//staging buffer and its memory allocation will go out of scope, and destroyed
 	}
+
+	void copyBuffer(vk::raii::Buffer &srcBuffer, vk::raii::Buffer &dstBuffer, vk::DeviceSize size)
+	{
+		vk::CommandBufferAllocateInfo allocInfo{.commandPool = commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1};
+		vk::raii::CommandBuffer       commandCopyBuffer = std::move(device.allocateCommandBuffers(allocInfo).front());
+		commandCopyBuffer.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+		commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));
+		commandCopyBuffer.end();
+		queue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandCopyBuffer}, nullptr);
+		queue.waitIdle();
+	}
+
 
 	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)
 	{
