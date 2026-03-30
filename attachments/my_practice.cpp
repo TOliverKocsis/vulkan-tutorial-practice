@@ -10,6 +10,7 @@
 #include <fstream>
 #include <array>
 #include <assert.h>
+#include <chrono>
 
 #if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
 #	include <vulkan/vulkan_raii.hpp>
@@ -20,6 +21,8 @@ import vulkan_hpp;
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
+#define GLM_FORCE_RADIANS
+#include <glm/gtc/matrix_transform.hpp>
 
 constexpr uint32_t WIDTH  = 800;
 constexpr uint32_t HEIGHT = 600;
@@ -58,6 +61,13 @@ const std::vector<Vertex> vertices = {
     {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
     {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}};
 
+struct UniformBufferObject
+{
+	glm::mat4 model;
+	glm::mat4 view;
+	glm::mat4 proj;
+};
+
 const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
 class HelloTriangleApplication
 {
@@ -85,6 +95,8 @@ class HelloTriangleApplication
 	vk::SurfaceFormatKHR swapChainSurfaceFormat;
 	vk::Extent2D swapChainExtent;
 	std::vector<vk::raii::ImageView> swapChainImageViews;
+
+	vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
 	vk::raii::PipelineLayout pipelineLayout = nullptr;
 	vk::raii::Pipeline       graphicsPipeline = nullptr;
 
@@ -100,6 +112,10 @@ class HelloTriangleApplication
 	vk::raii::DeviceMemory vertexBufferMemory = nullptr;
 	vk::raii::Buffer       indexBuffer        = nullptr;
 	vk::raii::DeviceMemory indexBufferMemory  = nullptr;
+
+	std::vector<vk::raii::Buffer>       uniformBuffers;
+	std::vector<vk::raii::DeviceMemory> uniformBuffersMemory;
+	std::vector<void *>                 uniformBuffersMapped;
 
 	bool framebufferResized = false; //warn us when pixel extent change (usually window resize)
 
@@ -136,10 +152,12 @@ class HelloTriangleApplication
 		createLogicalDevice();
 		createSwapChain();
 		createImageViews();
+		createDescriptorSetLayout();
 		createGraphicsPipeline();
 		createCommandPool();
 		createVertexBuffer();
 		createIndexBuffer();
+		createUniformBuffers();
 		createCommandBuffers();
 		createSyncObjects();
 	}
@@ -522,7 +540,7 @@ class HelloTriangleApplication
 															.rasterizerDiscardEnable = vk::False,
 															.polygonMode = vk::PolygonMode::eFill,	//solid triangles
 															.cullMode = vk::CullModeFlagBits::eBack,
-															.frontFace = vk::FrontFace::eClockwise,
+															.frontFace = vk::FrontFace::eCounterClockwise,
 															.depthBiasEnable = vk::False,
 															.depthBiasSlopeFactor = 1.0f,
 															.lineWidth = 1.0f};
@@ -543,7 +561,7 @@ class HelloTriangleApplication
 										vk::DynamicState::eScissor}; 
 		vk::PipelineDynamicStateCreateInfo dynamicState{.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()), .pDynamicStates = dynamicStates.data()};
 		
-		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount = 0, .pushConstantRangeCount = 0}; 
+		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount = 1, .pSetLayouts = &*descriptorSetLayout, .pushConstantRangeCount = 0};
 		pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 		
 		//chain is because dynamic rendering api change, but Vulkan didnt want to break old struct definitioons of previous versions
@@ -618,6 +636,52 @@ class HelloTriangleApplication
 					indexBufferMemory);
 
 		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
+	}
+
+	void createUniformBuffers()
+	{
+		// allocate gpu and cpu visible memory on gpu
+		// since this will be used for the next transfer matrix, and updated every frame
+		// tutorial claims its more efficient than using a staging buffer. //todo: measure difference?
+		uniformBuffers.clear();
+		uniformBuffersMemory.clear();
+		uniformBuffersMapped.clear();
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+		{
+			vk::DeviceSize         bufferSize = sizeof(UniformBufferObject);
+			vk::raii::Buffer       buffer({});
+			vk::raii::DeviceMemory bufferMem({});
+			createBuffer(bufferSize,
+						vk::BufferUsageFlagBits::eUniformBuffer,
+						vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, 
+						buffer, 
+						bufferMem);
+			uniformBuffers.emplace_back(std::move(buffer));
+			uniformBuffersMemory.emplace_back(std::move(bufferMem));
+			uniformBuffersMapped.emplace_back(uniformBuffersMemory[i].mapMemory(0, bufferSize));
+		}
+	}
+
+	void updateUniformBuffer(uint32_t currentImage)
+	{
+		//make the rotation and view transform calculation for every frame, and copy it to gpu visible buffer
+		static auto startTime = std::chrono::high_resolution_clock::now();
+
+		auto  currentTime = std::chrono::high_resolution_clock::now();
+		float time        = std::chrono::duration<float>(currentTime - startTime).count();
+
+		UniformBufferObject ubo{};
+		//model: rotate object around Z axis 90 degrees/second
+		ubo.model = rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		//place camera at pos, looking at pos, 
+		ubo.view  = lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		//perspective projection with 45 degrees
+		ubo.proj  = glm::perspective(glm::radians(45.0f), static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height), 0.1f, 10.0f);
+		//glm designed for opengl, flip  Y to make it vulkan compatible
+		ubo.proj[1][1] *= -1;
+
+		memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 	}
 
 	void createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties, vk::raii::Buffer &buffer, vk::raii::DeviceMemory &bufferMemory)
@@ -785,6 +849,8 @@ class HelloTriangleApplication
 			throw std::runtime_error("failed to acquire swap chain image!");
 		}
 
+		updateUniformBuffer(frameIndex);
+
 		// Only reset the fence if we are submitting work
 		device.resetFences(*inFlightFences[frameIndex]);
 
@@ -824,6 +890,17 @@ class HelloTriangleApplication
 		// max frames in flight is less then the swapchain.
 		// we always wait for fence inflight[frame] to be done presenting (gpu signals) before we can start recording next image
 		// in flight 2 is usual setting, the larger the number the higher the latency of user input ->change on screen.
+	}
+
+	void createDescriptorSetLayout()
+	{
+		vk::DescriptorSetLayoutBinding uboLayoutBinding(0,
+														vk::DescriptorType::eUniformBuffer,
+														1, 
+														vk::ShaderStageFlagBits::eVertex, 
+														nullptr);
+		vk::DescriptorSetLayoutCreateInfo layoutInfo{.bindingCount = 1, .pBindings = &uboLayoutBinding};
+		descriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);
 	}
 
 	void createSyncObjects()
