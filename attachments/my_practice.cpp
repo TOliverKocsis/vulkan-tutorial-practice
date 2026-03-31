@@ -112,6 +112,8 @@ class HelloTriangleApplication
 	vk::raii::DeviceMemory vertexBufferMemory = nullptr;
 	vk::raii::Buffer       indexBuffer        = nullptr;
 	vk::raii::DeviceMemory indexBufferMemory  = nullptr;
+	vk::raii::DescriptorPool             descriptorPool = nullptr;
+	std::vector<vk::raii::DescriptorSet> descriptorSets;
 
 	std::vector<vk::raii::Buffer>       uniformBuffers;
 	std::vector<vk::raii::DeviceMemory> uniformBuffersMemory;
@@ -158,6 +160,8 @@ class HelloTriangleApplication
 		createVertexBuffer();
 		createIndexBuffer();
 		createUniformBuffers();
+		createDescriptorPool();
+		createDescriptorSets();
 		createCommandBuffers();
 		createSyncObjects();
 	}
@@ -385,7 +389,7 @@ class HelloTriangleApplication
 	/*
 		Return the resolution of swap chain images 
 	*/
-	vk::Extent2D chooseSwapExtent(vk::SurfaceCapabilitiesKHR const &capabilities)
+	vk::Extent2D chooseSwapExtent(const vk::SurfaceCapabilitiesKHR &capabilities)
 	{
 		//in case the width+height is a sentiunel value, it signals that out gpu kbnows from the os,
 		//that we have a high dpi display, where logical screen cordinates is != framebuffer
@@ -663,6 +667,42 @@ class HelloTriangleApplication
 		}
 	}
 
+	void createDescriptorPool()
+	{
+		// reserve the descriptor on gpu 
+		// indirect layer between sahder code and gpu memory, "tells gpu where to find UBO"
+		vk::DescriptorPoolSize       poolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT);
+		vk::DescriptorPoolCreateInfo poolInfo{.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, .maxSets = MAX_FRAMES_IN_FLIGHT, .poolSizeCount = 1, .pPoolSizes = &poolSize};
+		descriptorPool = vk::raii::DescriptorPool(device, poolInfo);
+	}
+
+	void createDescriptorSets()
+	{
+		//allocate from reserved pool, write to device
+		std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *descriptorSetLayout);
+		vk::DescriptorSetAllocateInfo        allocInfo{.descriptorPool = descriptorPool, .descriptorSetCount = static_cast<uint32_t>(layouts.size()), .pSetLayouts = layouts.data()};
+
+		descriptorSets = device.allocateDescriptorSets(allocInfo);
+
+		//recall that every frame has to ahve its own,
+		//as the ubo the descriptor point at are frame specfic transfiormation (e.g view angel, distance, camera faciong etc)
+		//therefore cannot point on a frame n's ubo as we would overwrite that mid draw
+		//(ubo: uniform buffer object, the read-only per frame transform data for gpu)
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+		{
+			vk::DescriptorBufferInfo bufferInfo{.buffer = uniformBuffers[i], //frame 0 gets (ubo)buffer 0 
+												.offset = 0, 
+												.range = sizeof(UniformBufferObject)};
+			vk::WriteDescriptorSet descriptorWrite{	.dstSet = descriptorSets[i],  //frame 0 gets (ubo)buffer 0
+													.dstBinding = 0, 
+													.dstArrayElement = 0,
+													.descriptorCount = 1,
+													.descriptorType = vk::DescriptorType::eUniformBuffer,
+													.pBufferInfo = &bufferInfo};
+			device.updateDescriptorSets(descriptorWrite, {});
+		}
+	}
+
 	void updateUniformBuffer(uint32_t currentImage)
 	{
 		//make the rotation and view transform calculation for every frame, and copy it to gpu visible buffer
@@ -802,7 +842,8 @@ class HelloTriangleApplication
 		commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent.width), static_cast<float>(swapChainExtent.height), 0.0f, 1.0f));
 		commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
 		commandBuffer.bindVertexBuffers(0, *vertexBuffer, {0});
-		commandBuffer.bindIndexBuffer(*indexBuffer, 0, vk::IndexTypeValue<decltype(indices)::value_type>::value);
+		commandBuffer.bindIndexBuffer(*indexBuffer, 0, vk::IndexType::eUint16);
+		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, *descriptorSets[frameIndex], nullptr);
 		commandBuffer.drawIndexed(indices.size(), 1, 0, 0, 0);
 		commandBuffer.endRendering();
 		// After rendering, transition the swapchain image to PRESENT_SRC - to fast to read memory for screen presentation
