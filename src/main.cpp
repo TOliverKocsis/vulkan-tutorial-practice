@@ -712,8 +712,15 @@ class HelloTriangleApplication
 		float time        = std::chrono::duration<float>(currentTime - startTime).count();
 
 		UniformBufferObject ubo{};
-		//model: rotate object around Z axis 90 degrees/second
-		ubo.model = rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+
+		
+		//model: rotate around Z axis, bounce vertically (Z = camera up direction)
+		//use sin wave for bounce, time multiplier sets frequency of bounce
+		float bounce = glm::sin(time * 2.0f) * 0.5f;
+		glm::mat4 translation = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, bounce));
+		ubo.model = translation * rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+
+
 		//place camera at pos, looking at pos, 
 		ubo.view  = lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 		//perspective projection with 45 degrees
