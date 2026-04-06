@@ -12,7 +12,11 @@ used in the original.
 - Descriptor sets, UBOs
 
 ## Building
-
+To make the build, from the main directory:
+cmake -B build .
+cmake --build build
+cd build
+./VulkanApp 
 
 ## Credits
 Based on https://docs.vulkan.org/tutorial/ licensed under CC BY-SA 4.0.
