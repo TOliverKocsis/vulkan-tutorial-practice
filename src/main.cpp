@@ -55,11 +55,16 @@ struct Vertex
 	}
 };
 
+// center + 6 perimeter vertices, angles at 0°, 60°, 120°, 180°, 240°, 300°
 const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}};
+    {{ 0.000f,  0.000f}, {1.0f, 1.0f, 1.0f}},  // 0: center (white)
+    {{ 0.500f,  0.000f}, {1.0f, 0.0f, 0.0f}},  // 1:   0° (red)
+    {{ 0.250f,  0.433f}, {1.0f, 0.5f, 0.0f}},  // 2:  60° (orange)
+    {{-0.250f,  0.433f}, {0.0f, 1.0f, 0.0f}},  // 3: 120° (green)
+    {{-0.500f,  0.000f}, {0.0f, 0.5f, 1.0f}},  // 4: 180° (cyan)
+    {{-0.250f, -0.433f}, {0.0f, 0.0f, 1.0f}},  // 5: 240° (blue)
+    {{ 0.250f, -0.433f}, {0.5f, 0.0f, 1.0f}},  // 6: 300° (violet)
+};
 
 struct UniformBufferObject
 {
@@ -69,7 +74,15 @@ struct UniformBufferObject
 	float     time;
 };
 
-const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
+// 6 triangles fanning out from center (vertex 0)
+const std::vector<uint16_t> indices = {
+    0, 1, 2,
+    0, 2, 3,
+    0, 3, 4,
+    0, 4, 5,
+    0, 5, 6,
+    0, 6, 1,  // wrap back to vertex 1 to close the hex
+};
 class HelloTriangleApplication
 {
   public:
