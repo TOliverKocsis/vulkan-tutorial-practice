@@ -66,6 +66,7 @@ struct UniformBufferObject
 	glm::mat4 model;
 	glm::mat4 view;
 	glm::mat4 proj;
+	float     time;
 };
 
 const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
@@ -707,19 +708,18 @@ class HelloTriangleApplication
 	{
 		//make the rotation and view transform calculation for every frame, and copy it to gpu visible buffer
 		static auto startTime = std::chrono::high_resolution_clock::now();
-
 		auto  currentTime = std::chrono::high_resolution_clock::now();
 		float time        = std::chrono::duration<float>(currentTime - startTime).count();
-
 		UniformBufferObject ubo{};
 
-		
 		//model: rotate around Z axis, bounce vertically (Z = camera up direction)
 		//use sin wave for bounce, time multiplier sets frequency of bounce
 		float bounce = glm::sin(time * 2.0f) * 0.5f;
+		//breathe: grow and shrink effect withj sin wave
+		float breathe = glm::sin(time * 1.5f) * 0.25f + 0.75f;
 		glm::mat4 translation = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, bounce));
-		ubo.model = translation * rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-
+		glm::mat4 scale = glm::scale(glm::mat4(1.0f), glm::vec3(breathe));
+		ubo.model = translation * scale * rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 
 		//place camera at pos, looking at pos, 
 		ubo.view  = lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
@@ -727,7 +727,9 @@ class HelloTriangleApplication
 		ubo.proj  = glm::perspective(glm::radians(45.0f), static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height), 0.1f, 10.0f);
 		//glm designed for opengl, flip  Y to make it vulkan compatible
 		ubo.proj[1][1] *= -1;
-
+		
+		//pass time
+		ubo.time = time;
 		memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 	}
 
@@ -945,7 +947,7 @@ class HelloTriangleApplication
 		vk::DescriptorSetLayoutBinding uboLayoutBinding(0,
 														vk::DescriptorType::eUniformBuffer,
 														1, 
-														vk::ShaderStageFlagBits::eVertex, 
+														vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
 														nullptr);
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{.bindingCount = 1, .pBindings = &uboLayoutBinding};
 		descriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);
